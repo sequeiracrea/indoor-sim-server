@@ -57,6 +57,11 @@ app.get("/data", (req, res) => {
   });
 });
 
+// --- Endpoint serveur ---
+app.get("/", (req, res) => {
+  res.send("🌐 Indoor Sim Server est en ligne ! Accédez à /data pour le JSON.");
+});
+
 app.listen(PORT, () => {
   console.log(`🌐 Serveur prêt sur http://localhost:${PORT}/data`);
 });
