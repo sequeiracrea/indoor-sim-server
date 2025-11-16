@@ -1,175 +1,113 @@
-// server.js
-import express from "express";
-import cors from "cors";
-import { computeIndices, pearson, std, mean } from "./utils/indices.js";
-
-const app = express();
-app.use(cors());
-
-const PORT = process.env.PORT || 3000;
-
-// ----------------- CONFIG -----------------
-const TICK_MS = 1000;                 // fréquence tick (1s)
-const HISTORY_SECONDS = 60 * 30;     // buffer 30 minutes (30*60)
-const SAMPLE_RATE = 1;                // 1 sample / second
-// ------------------------------------------
-
-// --- état courant (valeurs simulées) ---
-let state = {
-  co2: 600,
-  no2: 40,
-  nh3: 0.02,
-  co: 0.5,
-  temp: 22.5,
-  rh: 50,
-  pres: 1013,
-};
-
-// --- ring buffer (historique) ---
-const history = []; // array of {ts, measures}
-function pushHistory(meas) {
-  history.push(meas);
-  if (history.length > HISTORY_SECONDS) history.shift();
+// utils/indices.js
+export function mean(arr) {
+  if (!arr || arr.length === 0) return 0;
+  return arr.reduce((s,x)=>s+x,0)/arr.length;
 }
-
-// --- simple vary function (same as before) ---
-function vary(value, delta, min, max) {
-  const change = (Math.random() * 2 - 1) * delta;
-  let newVal = value + change;
-  if (newVal < min) newVal = min + (min - newVal) * 0.2;
-  if (newVal > max) newVal = max - (newVal - max) * 0.2;
-  return parseFloat(newVal.toFixed(3));
+export function std(arr) {
+  if (!arr || arr.length === 0) return 0;
+  const m = mean(arr);
+  const v = arr.reduce((s,x)=> s + (x - m)*(x - m), 0) / arr.length;
+  return Math.sqrt(v);
 }
-
-// --- simulation tick ---
-setInterval(() => {
-  state.co2 = vary(state.co2, 20, 450, 1500);
-  state.no2 = vary(state.no2, 2, 20, 120);
-  state.nh3 = vary(state.nh3, 0.002, 0.01, 0.08);
-  state.co = vary(state.co, 0.05, 0.2, 3);
-  state.temp = vary(state.temp, 0.12, 19, 26);
-  state.rh = vary(state.rh, 0.3, 35, 65);
-  state.pres = vary(state.pres, 0.05, 1008, 1018);
-
-  const timestamp = new Date().toISOString();
-  const measures = { ...state };
-  const entry = { timestamp, measures };
-
-  // push in history
-  pushHistory(entry);
-}, TICK_MS);
-
-// Helper: get window slice (last N seconds)
-function windowSeconds(sec) {
-  const len = history.length;
-  if (len === 0) return [];
-  const cutoff = Date.now() - sec * 1000;
-  return history.filter(h => new Date(h.timestamp).getTime() >= cutoff);
-}
-
-// --- Endpoints ---
-
-// 1) /data  -> current measures + indices (single object)
-app.get("/data", (req, res) => {
-  const lastWindow = windowSeconds(60); // 60s for volatility
-  const indices = computeIndices(state, lastWindow);
-  res.json({
-    timestamp: new Date().toISOString(),
-    measures: state,
-    indices,
-  });
-});
-
-// 2) /history?sec=300  -> time series last N seconds (default 1800s)
-app.get("/history", (req, res) => {
-  const sec = parseInt(req.query.sec || `${HISTORY_SECONDS}`, 10);
-  const slice = windowSeconds(sec);
-  // shape: [{timestamp, measures:{...}}]
-  res.json({
-    requested_sec: sec,
-    length: slice.length,
-    series: slice,
-  });
-});
-
-// 3) /corr?vars=co2,no2,co  -> correlation matrix for listed vars over last N sec
-app.get("/corr", (req, res) => {
-  const vars = (req.query.vars || "co2,no2,nh3,co").split(",").map(s => s.trim());
-  const sec = parseInt(req.query.sec || "1800", 10); // default 30 min
-  const slice = windowSeconds(sec);
-  // build arrays
-  const series = {};
-  vars.forEach(v => series[v] = slice.map(s => s.measures[v] ?? null).filter(x=>x!==null));
-  // compute pairwise pearson
-  const corr = {};
-  for (let i = 0; i < vars.length; i++) {
-    for (let j = i; j < vars.length; j++) {
-      const a = series[vars[i]];
-      const b = series[vars[j]];
-      const key = `${vars[i]}-${vars[j]}`;
-      const r = (a.length >= 2 && b.length >= 2 && a.length === b.length) ? pearson(a,b) : 0;
-      corr[key] = parseFloat((r || 0).toFixed(3));
-    }
+export function pearson(a, b) {
+  if (!a || !b || a.length !== b.length || a.length < 2) return 0;
+  const n = a.length;
+  const ma = mean(a);
+  const mb = mean(b);
+  let num = 0, denA = 0, denB = 0;
+  for (let i=0;i<n;i++){
+    const da = a[i] - ma;
+    const db = b[i] - mb;
+    num += da * db;
+    denA += da * da;
+    denB += db * db;
   }
-  res.json({
-    vars,
-    sec,
-    corr,
-  });
-});
+  const den = Math.sqrt(denA * denB);
+  if (den === 0) return 0;
+  return num / den;
+}
 
-// 4) /scatterbar?sec=600&x=temp&y=rh&step=60 -> return points for scatterbar page
-app.get("/scatterbar", (req, res) => {
-  const sec = parseInt(req.query.sec || "3600", 10); // default 1h
-  const xVar = req.query.x || "temp";
-  const yVar = req.query.y || "rh";
-  const step = parseInt(req.query.step || "60", 10); // sampling step seconds
-  const slice = windowSeconds(sec);
-  // sample every `step` seconds: group by bucket
-  const points = [];
-  for (let i = 0; i < slice.length; i += step) {
-    const s = slice[i];
-    if (!s) continue;
-    const measures = s.measures;
-    const total = (measures.co2 ||0) + (measures.no2||0) + (measures.nh3||0) + (measures.co||0);
-    points.push({
-      timestamp: s.timestamp,
-      x: measures[xVar],
-      y: measures[yVar],
-      co2: measures.co2,
-      no2: measures.no2,
-      nh3: measures.nh3,
-      co: measures.co,
-      total: parseFloat(total.toFixed(3)),
-      // optional: event flag (if total or co2 too high)
-      event: (measures.co2 > 1200 || measures.no2 > 150) ? "spike" : null
-    });
+// helper: clamp
+function clamp01(v){ return Math.max(0, Math.min(1, v)); }
+function clamp(v, a=0, b=100){ return Math.max(a, Math.min(b, v)); }
+
+// computeIndices: takes current state + window array (lastWindow entries: {timestamp, measures})
+export function computeIndices(state, lastWindow = []) {
+  // ---------- AQL ----------
+  // thresholds (adjust if you want)
+  const th = {
+    co2: [600, 2000],
+    no2: [40, 200],
+    nh3: [0.01, 0.1],
+    co: [0.5, 10]
+  };
+  function pollutantPenalty(x, good, bad) {
+    if (x <= good) return 0;
+    const p = (x - good) / (bad - good);
+    return clamp(p * 100, 0, 100);
   }
-  res.json({
-    requested_sec: sec,
-    xVar, yVar, step,
-    count: points.length,
-    points,
+  const p_co2 = pollutantPenalty(state.co2, th.co2[0], th.co2[1]);
+  const p_no2 = pollutantPenalty(state.no2, th.no2[0], th.no2[1]);
+  const p_nh3 = pollutantPenalty(state.nh3, th.nh3[0], th.nh3[1]);
+  const p_co = pollutantPenalty(state.co, th.co[0], th.co[1]);
+  const weightsPoll = { co2:0.5, no2:0.25, nh3:0.15, co:0.10 };
+  const AQ_penalty = p_co2*weightsPoll.co2 + p_no2*weightsPoll.no2 + p_nh3*weightsPoll.nh3 + p_co*weightsPoll.co;
+  const AQL = clamp(100 - AQ_penalty, 0, 100);
+
+  // ---------- TCI ----------
+  // raw penalty similar to earlier messages
+  const raw_tci = Math.abs(state.temp - 22)*2.5 + Math.abs(state.rh - 50)*0.5 + Math.abs(state.pres - 1013)*0.02;
+  const max_raw = 76; // normalization constant (tunable)
+  const TCI_penalty_pct = clamp(raw_tci / max_raw * 100, 0, 100);
+  const TCI = clamp(100 - TCI_penalty_pct, 0, 100);
+
+  // ---------- SRI (volatility) ----------
+  // compute std / amplitude on lastWindow (default last 60s)
+  const last60 = lastWindow.slice(-60); // last 60 entries approx (if tick=1s)
+  const co2_series = last60.map(s=>s.measures.co2);
+  const temp_series = last60.map(s=>s.measures.temp);
+  const rh_series = last60.map(s=>s.measures.rh);
+  // take standard deviation (or 0 if too few points)
+  const s_co2 = co2_series.length >= 2 ? std(co2_series) : 0;
+  const s_temp = temp_series.length >= 2 ? std(temp_series) : 0;
+  const s_rh = rh_series.length >= 2 ? std(rh_series) : 0;
+  const beta = { co2:0.4, temp:0.3, rh:0.3 };
+  // normalize each by expected max sigma
+  const max_sigma = { co2:500, temp:3, rh:10 };
+  const term = (s_co2 / max_sigma.co2) * beta.co2 + (s_temp / max_sigma.temp) * beta.temp + (s_rh / max_sigma.rh) * beta.rh;
+  const SRI = clamp(100 - term * 100, 0, 100);
+  const Volatility_penalty = clamp(term * 100, 0, 100);
+
+  // ---------- GEI ----------
+  // compute correlations on a longer window (last 10-30 min ideally)
+  const corrWindow = lastWindow.slice(- (60 * 20)); // last 20 min approx
+  const corrSeries = {};
+  ['co2','no2','co','nh3'].forEach(k=>{
+    corrSeries[k] = corrWindow.map(s=>s.measures[k]).filter(x=>x !== undefined && x !== null);
   });
-});
+  // compute pearson for pairs (co2,no2) and (co,nh3) as earlier formula
+  const corr_co2_no2 = (corrSeries.co2.length >= 2 && corrSeries.no2.length === corrSeries.co2.length) ? pearson(corrSeries.co2, corrSeries.no2) : 0;
+  const corr_co_nh3 = (corrSeries.co.length >= 2 && corrSeries.nh3.length === corrSeries.co.length) ? pearson(corrSeries.co, corrSeries.nh3) : 0;
+  const GEI = clamp(100 - Math.abs(corr_co2_no2)*40 - Math.abs(corr_co_nh3)*40, 0, 100);
 
-// 5) /gaqi-breakdown -> detailed breakdown used for GAQI page/subbars
-app.get("/gaqi-breakdown", (req,res) => {
-  const last60 = windowSeconds(60);
-  const indices = computeIndices(state, last60);
-  // Also compute component penalties in detail (recompute here to return breakdown)
-  // computeIndices returns AQL,GEI,TCI,SRI,GAQI -- we will return them
-  res.json({
-    timestamp: new Date().toISOString(),
-    measures: state,
-    indices,
-  });
-});
+  // ---------- GAQI (global) ----------
+  // Example weighted composition: (tune alpha weights as needed)
+  const alpha = { a1:0.45, a2:0.25, a3:0.2, a4:0.10 };
+  // comfort penalty uses TCI_penalty_pct, AQ_penalty is already 0..100, volatility_penalty is Volatility_penalty
+  const GAQI_raw = 100 - (alpha.a1 * AQ_penalty + alpha.a2 * TCI_penalty_pct + alpha.a3 * (100 - GEI) + alpha.a4 * Volatility_penalty);
+  const GAQI = clamp(GAQI_raw, 0, 100);
 
-// health
-app.get("/health", (req,res) => res.json({ ok:true, time: new Date().toISOString(), historyLen: history.length }));
-
-// start
-app.listen(PORT, () => {
-  console.log(`🌐 Serveur prêt sur http://localhost:${PORT}/data`);
-});
+  // --- Return breakdown
+  return {
+    AQL: parseFloat(AQL.toFixed(2)),
+    AQ_penalty: parseFloat(AQ_penalty.toFixed(2)),
+    TCI: parseFloat(TCI.toFixed(2)),
+    TCI_penalty_pct: parseFloat(TCI_penalty_pct.toFixed(2)),
+    SRI: parseFloat(SRI.toFixed(2)),
+    Volatility_penalty: parseFloat(Volatility_penalty.toFixed(2)),
+    GEI: parseFloat(GEI.toFixed(2)),
+    corr_co2_no2: parseFloat(corr_co2_no2.toFixed(3)),
+    corr_co_nh3: parseFloat(corr_co_nh3.toFixed(3)),
+    GAQI: parseFloat(GAQI.toFixed(2))
+  };
+}
