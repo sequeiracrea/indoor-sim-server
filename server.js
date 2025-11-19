@@ -6,7 +6,6 @@ import { computeIndices } from "./utils/indices.js";
 const app = express();
 app.use(cors());
 
-// Use provided PORT (Render sets it) or fallback to 3000 for local dev
 const PORT = process.env.PORT || 3000;
 
 // --- state & history ---
@@ -20,11 +19,22 @@ let state = {
   pres: 1013
 };
 
-const HISTORY_MAX = 60 * 60; // keep up to 1h of 1s samples
+const HISTORY_MAX = 60 * 60; // 1h
 const history = [];
 
+// -----------------------------------------------
+// 🔥 IMPORTANT : ici on stocke measures + indices
+// -----------------------------------------------
 function pushHistory(measures) {
-  history.push({ timestamp: new Date().toISOString(), measures: { ...measures } });
+  const lastWindow = history.slice(-60); // utilisé pour SRI
+  const indices = computeIndices(measures, lastWindow);
+
+  history.push({
+    timestamp: new Date().toISOString(),
+    measures: { ...measures },
+    indices: { ...indices } // <-- indispensable !!
+  });
+
   if (history.length > HISTORY_MAX) history.shift();
 }
 
@@ -36,7 +46,7 @@ function vary(value, delta, min, max) {
   return parseFloat(newVal.toFixed(3));
 }
 
-// Simulation tick (safe: wrapped in try/catch)
+// tick simulation
 setInterval(() => {
   try {
     state.co2 = vary(state.co2, 20, 450, 1500);
@@ -49,26 +59,28 @@ setInterval(() => {
 
     pushHistory(state);
   } catch (err) {
-    // Never let the tick crash the process
     console.error("Tick error:", err);
   }
 }, 1000);
 
-// Helper: return last N seconds slice (based on history timestamps)
 function windowSeconds(sec) {
   const cutoff = Date.now() - sec * 1000;
   return history.filter(h => new Date(h.timestamp).getTime() >= cutoff);
 }
 
-// --- Routes with defensive coding ---
+// --------------------
+// ROUTES API
+// --------------------
 app.get("/health", (req, res) => {
   res.json({ ok: true, time: new Date().toISOString(), historyLen: history.length });
 });
 
+// 🔥 /data : OK, calcule déjà les indices
 app.get("/data", (req, res) => {
   try {
-    const lastWindow = windowSeconds(60); // last 60s for volatility calc
+    const lastWindow = windowSeconds(60);
     const indices = computeIndices(state, lastWindow);
+
     return res.json({
       timestamp: new Date().toISOString(),
       measures: { ...state },
@@ -76,7 +88,6 @@ app.get("/data", (req, res) => {
     });
   } catch (err) {
     console.error("/data error:", err);
-    // Return safe fallback instead of 500/503 so client sees something
     return res.status(200).json({
       timestamp: new Date().toISOString(),
       measures: { ...state },
@@ -85,27 +96,37 @@ app.get("/data", (req, res) => {
   }
 });
 
+// 🔥🔥 CRUCIAL : /history renvoie désormais measures + indices
 app.get("/history", (req, res) => {
   try {
     const sec = parseInt(req.query.sec || "1800", 10);
     const slice = windowSeconds(sec);
-    return res.json({ requested_sec: sec, length: slice.length, series: slice });
+
+    return res.json({
+      requested_sec: sec,
+      length: slice.length,
+      series: slice.map(s => ({
+        timestamp: s.timestamp,
+        measures: s.measures,
+        indices: s.indices || {}  // <-- ajouté ici !!
+      }))
+    });
   } catch (err) {
     console.error("/history error:", err);
     return res.status(500).json({ error: err.message });
   }
 });
 
+// corr unchanged
 app.get("/corr", (req, res) => {
   try {
-    // For simplicity, compute on server side using computeIndices helpers if needed
     const vars = (req.query.vars || "co2,no2,nh3,co").split(",").map(s => s.trim());
     const sec = parseInt(req.query.sec || "1800", 10);
     const slice = windowSeconds(sec);
-    // build arrays
+
     const series = {};
     vars.forEach(v => (series[v] = slice.map(s => s.measures[v]).filter(x => x != null)));
-    // compute pairwise pearson via computeIndices (it can export helpers) or simple fallback
+
     const corr = {};
     for (let i = 0; i < vars.length; i++) {
       for (let j = i; j < vars.length; j++) {
@@ -113,29 +134,27 @@ app.get("/corr", (req, res) => {
         const b = series[vars[j]] || [];
         let r = 0;
         if (a.length >= 2 && a.length === b.length) {
-          // simple pearson inline to avoid circular imports
           const n = a.length;
           const ma = a.reduce((s,x)=>s+x,0)/n;
           const mb = b.reduce((s,x)=>s+x,0)/n;
           let num=0, denA=0, denB=0;
           for (let k=0;k<n;k++){
-            const da = a[k]-ma; const db = b[k]-mb;
-            num += da*db; denA += da*da; denB += db*db;
+            const da=a[k]-ma, db=b[k]-mb;
+            num+=da*db; denA+=da*da; denB+=db*db;
           }
-          const den = Math.sqrt(denA*denB);
-          r = den === 0 ? 0 : num/den;
+          const den=Math.sqrt(denA*denB);
+          r = den===0?0:num/den;
         }
         corr[`${vars[i]}-${vars[j]}`] = parseFloat((r||0).toFixed(3));
       }
     }
-    return res.json({ vars, sec, corr });
+    res.json({ vars, sec, corr });
   } catch (err) {
     console.error("/corr error:", err);
-    return res.status(500).json({ error: err.message });
+    res.status(500).json({ error: err.message });
   }
 });
 
-// Basic startup error handling
 app.use((err, req, res, next) => {
   console.error("Unhandled error:", err);
   res.status(500).json({ error: "server error" });
