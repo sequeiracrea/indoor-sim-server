@@ -19,7 +19,7 @@ let state = {
   pres: 1013
 };
 
-const HISTORY_MAX = 60 * 60; // 1h
+const HISTORY_MAX = 7200; // 1h
 const history = [];
 
 // -----------------------------------------------
@@ -61,7 +61,7 @@ setInterval(() => {
   } catch (err) {
     console.error("Tick error:", err);
   }
-}, 1000);
+}, 2000);
 
 function windowSeconds(sec) {
   const cutoff = Date.now() - sec * 1000;
@@ -99,7 +99,7 @@ app.get("/data", (req, res) => {
 // 🔥🔥 CRUCIAL : /history renvoie désormais measures + indices
 app.get("/history", (req, res) => {
   try {
-    const sec = parseInt(req.query.sec || "1800", 10);
+    const sec = parseInt(req.query.sec || "14400", 10);
     const slice = windowSeconds(sec);
 
     return res.json({
