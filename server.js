@@ -1,3 +1,4 @@
+// server.js
 import express from "express";
 import cors from "cors";
 import { computeIndices } from "./utils/indices.js";
@@ -7,19 +8,7 @@ app.use(cors());
 
 const PORT = process.env.PORT || 3000;
 
-/* ============================================================
-   CONFIG OPTIMISÉE RENDER + PROTOPIE
-============================================================ */
-
-const TICK_INTERVAL = 2000;           // 2 secondes
-const HISTORY_HOURS = 4;              // 4 heures
-const HISTORY_MAX = (HISTORY_HOURS * 3600) / (TICK_INTERVAL / 1000);
-// = 7200 entrées
-
-/* ============================================================
-   STATE
-============================================================ */
-
+// --- state & history ---
 let state = {
   co2: 600,
   no2: 40,
@@ -30,44 +19,34 @@ let state = {
   pres: 1013
 };
 
+const HISTORY_MAX = 60 * 60; // 1h
 const history = [];
 
-/* ============================================================
-   HISTORY
-============================================================ */
-
+// -----------------------------------------------
+// 🔥 IMPORTANT : ici on stocke measures + indices
+// -----------------------------------------------
 function pushHistory(measures) {
-  const lastWindow = history.slice(-30); // 1 min approx (30 * 2s)
+  const lastWindow = history.slice(-60); // utilisé pour SRI
   const indices = computeIndices(measures, lastWindow);
 
   history.push({
-    timestamp: Date.now(), // plus rapide qu'ISO
+    timestamp: new Date().toISOString(),
     measures: { ...measures },
-    indices: { ...indices }
+    indices: { ...indices } // <-- indispensable !!
   });
 
   if (history.length > HISTORY_MAX) history.shift();
 }
 
-function windowSeconds(sec) {
-  const cutoff = Date.now() - sec * 1000;
-  return history.filter(h => h.timestamp >= cutoff);
-}
-
-/* ============================================================
-   SIMULATION
-============================================================ */
-
 function vary(value, delta, min, max) {
   const change = (Math.random() * 2 - 1) * delta;
   let newVal = value + change;
-
-  if (newVal < min) newVal = min;
-  if (newVal > max) newVal = max;
-
+  if (newVal < min) newVal = min + (min - newVal) * 0.2;
+  if (newVal > max) newVal = max - (newVal - max) * 0.2;
   return parseFloat(newVal.toFixed(3));
 }
 
+// tick simulation
 setInterval(() => {
   try {
     state.co2 = vary(state.co2, 20, 450, 1500);
@@ -82,128 +61,105 @@ setInterval(() => {
   } catch (err) {
     console.error("Tick error:", err);
   }
-}, TICK_INTERVAL);
+}, 1000);
 
-/* ============================================================
-   ROUTES
-============================================================ */
+function windowSeconds(sec) {
+  const cutoff = Date.now() - sec * 1000;
+  return history.filter(h => new Date(h.timestamp).getTime() >= cutoff);
+}
 
-// Health (léger)
+// --------------------
+// ROUTES API
+// --------------------
 app.get("/health", (req, res) => {
-  res.json({
-    ok: true,
-    history_points: history.length,
-    max_points: HISTORY_MAX
-  });
+  res.json({ ok: true, time: new Date().toISOString(), historyLen: history.length });
 });
 
-// Dernière valeur (dashboard temps réel)
+// 🔥 /data : OK, calcule déjà les indices
 app.get("/data", (req, res) => {
   try {
-    const lastWindow = history.slice(-30);
+    const lastWindow = windowSeconds(60);
     const indices = computeIndices(state, lastWindow);
 
-    res.json({
-      timestamp: Date.now(),
-      measures: state,
+    return res.json({
+      timestamp: new Date().toISOString(),
+      measures: { ...state },
       indices
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error("/data error:", err);
+    return res.status(200).json({
+      timestamp: new Date().toISOString(),
+      measures: { ...state },
+      indices: { error: "compute error", message: err.message }
+    });
   }
 });
 
-/* ============================================================
-   HISTORY OPTIMISÉ PROTOPIE
-============================================================ */
-
+// 🔥🔥 CRUCIAL : /history renvoie désormais measures + indices
 app.get("/history", (req, res) => {
   try {
-    const sec = Math.min(parseInt(req.query.sec || "14400", 10), 14400); 
-    // max 4h
-
-    const step = Math.max(parseInt(req.query.step || "15", 10), 1);
-    // défaut = 15 → super fluide ProtoPie
-
+    const sec = parseInt(req.query.sec || "1800", 10);
     const slice = windowSeconds(sec);
 
-    const reduced = slice.filter((_, i) => i % step === 0);
-
-    res.json({
-      sec,
-      step,
-      original_points: slice.length,
-      returned_points: reduced.length,
-      series: reduced
+    return res.json({
+      requested_sec: sec,
+      length: slice.length,
+      series: slice.map(s => ({
+        timestamp: s.timestamp,
+        measures: s.measures,
+        indices: s.indices || {}  // <-- ajouté ici !!
+      }))
     });
-
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error("/history error:", err);
+    return res.status(500).json({ error: err.message });
   }
 });
 
-/* ============================================================
-   CORRELATION LIMITÉE (évite surcharge free tier)
-============================================================ */
-
+// corr unchanged
 app.get("/corr", (req, res) => {
   try {
-    const vars = (req.query.vars || "co2,no2,nh3,co")
-      .split(",")
-      .map(s => s.trim());
-
-    const sec = Math.min(parseInt(req.query.sec || "1800", 10), 1800);
-    // max 30 min pour éviter calcul lourd
-
+    const vars = (req.query.vars || "co2,no2,nh3,co").split(",").map(s => s.trim());
+    const sec = parseInt(req.query.sec || "1800", 10);
     const slice = windowSeconds(sec);
 
     const series = {};
-    vars.forEach(v => {
-      series[v] = slice.map(s => s.measures[v]).filter(x => x != null);
-    });
+    vars.forEach(v => (series[v] = slice.map(s => s.measures[v]).filter(x => x != null)));
 
     const corr = {};
-
     for (let i = 0; i < vars.length; i++) {
       for (let j = i; j < vars.length; j++) {
-
         const a = series[vars[i]] || [];
         const b = series[vars[j]] || [];
         let r = 0;
-
         if (a.length >= 2 && a.length === b.length) {
           const n = a.length;
           const ma = a.reduce((s,x)=>s+x,0)/n;
           const mb = b.reduce((s,x)=>s+x,0)/n;
-
           let num=0, denA=0, denB=0;
-
           for (let k=0;k<n;k++){
             const da=a[k]-ma, db=b[k]-mb;
-            num+=da*db;
-            denA+=da*da;
-            denB+=db*db;
+            num+=da*db; denA+=da*da; denB+=db*db;
           }
-
           const den=Math.sqrt(denA*denB);
           r = den===0?0:num/den;
         }
-
-        corr[`${vars[i]}-${vars[j]}`] = Number(r.toFixed(3));
+        corr[`${vars[i]}-${vars[j]}`] = parseFloat((r||0).toFixed(3));
       }
     }
-
     res.json({ vars, sec, corr });
-
   } catch (err) {
+    console.error("/corr error:", err);
     res.status(500).json({ error: err.message });
   }
 });
 
-/* ============================================================
-   START
-============================================================ */
+app.use((err, req, res, next) => {
+  console.error("Unhandled error:", err);
+  res.status(500).json({ error: "server error" });
+});
 
 app.listen(PORT, () => {
-  console.log(`Server ready on port ${PORT}`);
+  console.log(`🌐 Serveur prêt sur http://localhost:${PORT}/data`);
 });
