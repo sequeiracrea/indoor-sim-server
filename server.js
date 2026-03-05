@@ -78,21 +78,30 @@ app.get("/health", (req, res) => {
 // 🔥 /data : OK, calcule déjà les indices
 app.get("/data", (req, res) => {
   try {
-    const lastWindow = windowSeconds(60);
-    const indices = computeIndices(state, lastWindow);
 
-    return res.json({
-      timestamp: new Date().toISOString(),
-      measures: { ...state },
-      indices
-    });
+    if (streamIndex < history.length) {
+
+      const entry = history[streamIndex];
+      streamIndex++;
+
+      return res.json({
+        timestamp: entry.timestamp,
+        measures: entry.measures,
+        indices: entry.indices
+      });
+
+    } else {
+
+      // aucune nouvelle donnée
+      return res.json({
+        status: "no new data"
+      });
+
+    }
+
   } catch (err) {
     console.error("/data error:", err);
-    return res.status(200).json({
-      timestamp: new Date().toISOString(),
-      measures: { ...state },
-      indices: { error: "compute error", message: err.message }
-    });
+    return res.status(500).json({ error: err.message });
   }
 });
 
