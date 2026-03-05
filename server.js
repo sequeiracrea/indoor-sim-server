@@ -19,7 +19,7 @@ let state = {
   pres: 1013
 };
 
-const HISTORY_MAX = 60 * 60; // 1h
+const HISTORY_MAX = 3600; // 1h
 const history = [];
 
 // -----------------------------------------------
@@ -61,7 +61,7 @@ setInterval(() => {
   } catch (err) {
     console.error("Tick error:", err);
   }
-}, 1000);
+}, 2000);
 
 function windowSeconds(sec) {
   const cutoff = Date.now() - sec * 1000;
