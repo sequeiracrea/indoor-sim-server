@@ -88,10 +88,9 @@ app.get("/data", (req, res) => {
       streamIndex++;
 
       return res.json({
-        timestamp: item.timestamp,
-        measures: item.measures,
-        indices: item.indices,
-        streamIndex: streamIndex
+        timestamp: entry.timestamp,
+        measures: entry.measures,
+        indices: entry.indices
       });
 
     } else {
