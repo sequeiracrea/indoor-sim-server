@@ -22,6 +22,9 @@ let state = {
 const HISTORY_MAX = 3600; // 1h
 const history = [];
 
+// curseur de lecture pour /data
+let streamIndex = 0;
+
 // -----------------------------------------------
 // 🔥 IMPORTANT : ici on stocke measures + indices
 // -----------------------------------------------
