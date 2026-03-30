@@ -63,7 +63,7 @@ export function computeIndices(state, lastWindow = []) {
     const TCI = clamp(100 - TCI_penalty_pct, 0, 100);
 
     // ---------- SRI ----------
-    const last60 = (lastWindow && lastWindow.length) ? lastWindow.slice(-60) : [];
+    const last60 = lastWindow.slice(-60);
     const co2_series = last60.map(s => s.measures.co2).filter(x => x != null);
     const temp_series = last60.map(s => s.measures.temp).filter(x => x != null);
     const rh_series = last60.map(s => s.measures.rh).filter(x => x != null);
@@ -77,49 +77,26 @@ export function computeIndices(state, lastWindow = []) {
     const Volatility_penalty = clamp(term * 100, 0, 100);
 
     // ---------- GEI ----------
-    const corrWindow = (lastWindow && lastWindow.length) ? lastWindow.slice(- (60 * 20)) : [];
-    const corrSeries = {};
-    ['co2','no2','co','nh3'].forEach(k=>{
-      corrSeries[k] = corrWindow.map(s=>s.measures[k]).filter(x=>x !== undefined && x !== null);
-    });
-    // ---------- GEI ----------
+    const corrWindow = lastWindow.slice(-(60*20));
     const gases = ["co2","no2","co","nh3"];
-    
-    const corrWindow = (lastWindow && lastWindow.length)
-      ? lastWindow.slice(-(60*20))
-      : [];
-    
     const corrSeries = {};
-    
     gases.forEach(k=>{
       corrSeries[k] = corrWindow
         .map(s=>s.measures[k])
         .filter(x=>x !== undefined && x !== null);
     });
-    
     let corrList = [];
-    
     for(let i=0;i<gases.length;i++){
       for(let j=i+1;j<gases.length;j++){
-    
         const a = corrSeries[gases[i]];
         const b = corrSeries[gases[j]];
-    
         if(a.length >= 2 && a.length === b.length){
-    
           const r = pearson(a,b);
-    
           corrList.push(Math.abs(r));
-    
         }
-    
       }
     }
-    
-    const meanCorr = corrList.length
-      ? mean(corrList)
-      : 0;
-    
+    const meanCorr = corrList.length ? mean(corrList) : 0;
     const GEI = clamp(100 - meanCorr*100, 0, 100);
 
     // ---------- GAQI ----------
