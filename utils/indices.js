@@ -82,15 +82,45 @@ export function computeIndices(state, lastWindow = []) {
     ['co2','no2','co','nh3'].forEach(k=>{
       corrSeries[k] = corrWindow.map(s=>s.measures[k]).filter(x=>x !== undefined && x !== null);
     });
-    let corr_co2_no2 = 0, corr_co_nh3 = 0;
-    try {
-      if (corrSeries.co2.length >= 2 && corrSeries.no2.length === corrSeries.co2.length) corr_co2_no2 = pearson(corrSeries.co2, corrSeries.no2);
-      if (corrSeries.co.length >= 2 && corrSeries.nh3.length === corrSeries.co.length) corr_co_nh3 = pearson(corrSeries.co, corrSeries.nh3);
-    } catch(e){
-      // fallback to 0
-      corr_co2_no2 = 0; corr_co_nh3 = 0;
+    // ---------- GEI ----------
+    const gases = ["co2","no2","co","nh3"];
+    
+    const corrWindow = (lastWindow && lastWindow.length)
+      ? lastWindow.slice(-(60*20))
+      : [];
+    
+    const corrSeries = {};
+    
+    gases.forEach(k=>{
+      corrSeries[k] = corrWindow
+        .map(s=>s.measures[k])
+        .filter(x=>x !== undefined && x !== null);
+    });
+    
+    let corrList = [];
+    
+    for(let i=0;i<gases.length;i++){
+      for(let j=i+1;j<gases.length;j++){
+    
+        const a = corrSeries[gases[i]];
+        const b = corrSeries[gases[j]];
+    
+        if(a.length >= 2 && a.length === b.length){
+    
+          const r = pearson(a,b);
+    
+          corrList.push(Math.abs(r));
+    
+        }
+    
+      }
     }
-    const GEI = clamp(100 - Math.abs(corr_co2_no2)*40 - Math.abs(corr_co_nh3)*40, 0, 100);
+    
+    const meanCorr = corrList.length
+      ? mean(corrList)
+      : 0;
+    
+    const GEI = clamp(100 - meanCorr*100, 0, 100);
 
     // ---------- GAQI ----------
     const alpha = { a1:0.45, a2:0.25, a3:0.2, a4:0.10 };
@@ -105,8 +135,12 @@ export function computeIndices(state, lastWindow = []) {
       SRI: Number(SRI.toFixed(2)),
       Volatility_penalty: Number(Volatility_penalty.toFixed(2)),
       GEI: Number(GEI.toFixed(2)),
-      corr_co2_no2: Number(corr_co2_no2.toFixed(3)),
-      corr_co_nh3: Number(corr_co_nh3.toFixed(3)),
+      corr_co2_no2: Number(pearson(corrSeries.co2,corrSeries.no2).toFixed(3)),
+      corr_co2_co: Number(pearson(corrSeries.co2,corrSeries.co).toFixed(3)),
+      corr_co2_nh3: Number(pearson(corrSeries.co2,corrSeries.nh3).toFixed(3)),
+      corr_no2_co: Number(pearson(corrSeries.no2,corrSeries.co).toFixed(3)),
+      corr_no2_nh3: Number(pearson(corrSeries.no2,corrSeries.nh3).toFixed(3)),
+      corr_co_nh3: Number(pearson(corrSeries.co,corrSeries.nh3).toFixed(3)),
       GAQI: Number(GAQI.toFixed(2))
     };
   } catch (err) {
