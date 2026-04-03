@@ -21,15 +21,6 @@ export function pearson(a,b){
 
 function clamp(v,min=0,max=100){ return Math.max(min, Math.min(max,v)); }
 
-function pressureEffect(p){
-  if(p == null) return 0;
-
-  const delta = Math.abs(p - 1013);
-
-  if(delta < 5) return 0;
-  if(delta < 10) return delta * 0.02;
-  return delta * 0.05;
-}
 
 // ---------- TCI helpers ----------
 
