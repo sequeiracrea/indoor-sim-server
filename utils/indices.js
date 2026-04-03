@@ -31,6 +31,77 @@ function pressureEffect(p){
   return delta * 0.05;
 }
 
+// ---------- TCI helpers ----------
+
+// pression perçue (non linéaire)
+function pressureEffect(p){
+  if(p == null) return 0;
+
+  const delta = Math.abs(p - 1013);
+
+  if(delta < 5) return 0;
+  if(delta < 10) return delta * 0.02;
+  return delta * 0.05;
+}
+
+// interprétation UX
+function interpretTCI(TCI, state){
+
+  // niveau global
+  let label = "";
+  if (TCI >= 85) label = "Excellent";
+  else if (TCI >= 60) label = "Confortable";
+  else if (TCI >= 40) label = "Moyen";
+  else label = "Inconfort";
+
+  // ressenti + contexte
+  let feel = "Air neutre";
+  let context = "Conditions équilibrées";
+
+  // priorité aux combinaisons réalistes
+  if(state.temp > 25 && state.rh > 60){
+    feel = "Air lourd";
+    context = "Chaleur et humidité élevées";
+  }
+  else if(state.temp > 25){
+    feel = "Air chaud";
+    context = "Température élevée";
+  }
+  else if(state.temp < 19){
+    feel = "Air frais";
+    context = "Température basse";
+  }
+
+  if(state.rh < 40){
+    feel = "Air sec";
+    context = "Humidité faible";
+  }
+  else if(state.rh > 65 && state.temp <= 25){
+    feel = "Air humide";
+    context = "Humidité élevée";
+  }
+
+  if(state.pres < 1005 && state.rh > 60){
+    feel = "Air lourd et pesant";
+    context = "Basse pression et humidité élevée";
+  }
+
+  // suggestion (bonus UX)
+  let hint = null;
+
+  if (TCI < 60) {
+    hint = "Ventilation recommandée";
+  }
+  if (state.rh > 65) {
+    hint = "Réduire l'humidité conseillé";
+  }
+  if (state.temp > 26) {
+    hint = "Rafraîchir la pièce conseillé";
+  }
+
+  return { label, feel, context, hint };
+}
+
 export function computeIndices(state,lastWindow=[]){
   try{
     // ---------- AQL ----------
@@ -44,7 +115,7 @@ export function computeIndices(state,lastWindow=[]){
     const AQ_penalty=p.co2*weights.co2+p.no2*weights.no2+p.nh3*weights.nh3+p.co*weights.co;
     const AQL=clamp(100-AQ_penalty);
 
-    // ---------- TCI (version optimisée) ----------
+    // ---------- TCI (version optimisée + smart UX) ----------
     const tempPenalty = state.temp == null
       ? 0
       : Math.abs(state.temp - 22) * 2.5;
@@ -55,7 +126,7 @@ export function computeIndices(state,lastWindow=[]){
     
     const presPenalty = pressureEffect(state.pres);
     
-    // synergies (ressenti réel)
+    // synergies réalistes
     let synergyPenalty = 0;
     
     if(state.temp > 25 && state.rh > 60){
@@ -72,10 +143,13 @@ export function computeIndices(state,lastWindow=[]){
     
     const rawTCI = tempPenalty + rhPenalty + presPenalty + synergyPenalty;
     
-    // normalisation cohérente avec ton modèle
+    // normalisation
     const maxRaw = 80;
     const TCI_penalty_pct = clamp((rawTCI / maxRaw) * 100);
     const TCI = clamp(100 - TCI_penalty_pct);
+    
+    // 👉 ajout UX
+    const tciUX = interpretTCI(TCI, state);
 
     // ---------- SRI ----------
     const last60=lastWindow.slice(-60);
@@ -136,6 +210,10 @@ export function computeIndices(state,lastWindow=[]){
     AQ_penalty: Number(AQ_penalty.toFixed(2)),
     TCI: Number(TCI.toFixed(2)),
     TCI_penalty_pct: Number(TCI_penalty_pct.toFixed(2)),
+    TCI_label: tciUX.label,
+    TCI_feel: tciUX.feel,
+    TCI_context: tciUX.context,
+    TCI_hint: tciUX.hint,
     SRI: Number(SRI.toFixed(2)),
     Volatility_penalty: Number(Volatility_penalty.toFixed(2)),
     GEI: Number(GEI.toFixed(2)),
