@@ -153,6 +153,42 @@ function interpretAQL(AQL, state){
 }
 
 
+// -------- SRI helpers --------
+function interpretSRI(SRI, lastWindow) {
+  // ---------- niveau global ----------
+  let label = "";
+  if (SRI >= 90) label = "Stable";
+  else if (SRI >= 75) label = "Légèrement instable";
+  else if (SRI >= 50) label = "Instable";
+  else label = "Très instable";
+
+  // ---------- analyse dominante ----------
+  let insight = "Air stable";
+  let context = "Variations mineures détectées";
+  let hint = "Aucune action requise";
+
+  // On peut examiner les sigma pour détecter des pics
+  if (lastWindow && lastWindow.length) {
+    const last60 = lastWindow.slice(-60);
+    const co2_series = last60.map(s => s.measures.co2).filter(x => x != null);
+    const temp_series = last60.map(s => s.measures.temp).filter(x => x != null);
+    const rh_series = last60.map(s => s.measures.rh).filter(x => x != null);
+
+    const s_co2 = co2_series.length >= 2 ? std(co2_series) : 0;
+    const s_temp = temp_series.length >= 2 ? std(temp_series) : 0;
+    const s_rh = rh_series.length >= 2 ? std(rh_series) : 0;
+
+    // vérification seuils relatifs aux sigma max
+    if (s_co2 > 250 || s_temp > 2 || s_rh > 5) {
+      insight = "Air instable";
+      context = `Variations détectées : CO₂(${s_co2.toFixed(1)}), Temp(${s_temp.toFixed(1)}), RH(${s_rh.toFixed(1)})`;
+      hint = "Surveiller l’environnement et ventiler si nécessaire";
+    }
+  }
+
+  return { label, insight, context, hint };
+}
+
 
 
 
@@ -218,6 +254,7 @@ export function computeIndices(state,lastWindow=[]){
     const term=(sigma.co2/maxSigma.co2)*beta.co2 + (sigma.temp/maxSigma.temp)*beta.temp + (sigma.rh/maxSigma.rh)*beta.rh;
     const SRI=clamp(100-term*100);
     const Volatility_penalty=clamp(term*100);
+    const sriUX = interpretSRI(SRI, lastWindow);
 
     // ---------- GEI & corrélations optimisés ----------
     const gases = ["co2","no2","co","nh3"];
@@ -275,6 +312,10 @@ export function computeIndices(state,lastWindow=[]){
     TCI_hint: tciUX.hint,
     SRI: Number(SRI.toFixed(2)),
     Volatility_penalty: Number(Volatility_penalty.toFixed(2)),
+    SRI_label: sriUX.label,
+    SRI_insight: sriUX.insight,
+    SRI_context: sriUX.context,
+    SRI_hint: sriUX.hint,
     GEI: Number(GEI.toFixed(2)),
     corr_co2_no2: corrPairs["co2-no2"] || 0,
     corr_co2_co: corrPairs["co2-co"] || 0,
