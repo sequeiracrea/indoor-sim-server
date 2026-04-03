@@ -21,6 +21,16 @@ export function pearson(a,b){
 
 function clamp(v,min=0,max=100){ return Math.max(min, Math.min(max,v)); }
 
+function pressureEffect(p){
+  if(p == null) return 0;
+
+  const delta = Math.abs(p - 1013);
+
+  if(delta < 5) return 0;
+  if(delta < 10) return delta * 0.02;
+  return delta * 0.05;
+}
+
 export function computeIndices(state,lastWindow=[]){
   try{
     // ---------- AQL ----------
@@ -34,12 +44,38 @@ export function computeIndices(state,lastWindow=[]){
     const AQ_penalty=p.co2*weights.co2+p.no2*weights.no2+p.nh3*weights.nh3+p.co*weights.co;
     const AQL=clamp(100-AQ_penalty);
 
-    // ---------- TCI ----------
-    const rawTCI=(state.temp==null?0:Math.abs(state.temp-22)*2.5)
-                 + (state.rh==null?0:Math.abs(state.rh-50)*0.5)
-                 + (state.pres==null?0:Math.abs(state.pres-1013)*0.02);
-    const TCI_penalty_pct=clamp(rawTCI/76*100);
-    const TCI=clamp(100-TCI_penalty_pct);
+    // ---------- TCI (version optimisée) ----------
+    const tempPenalty = state.temp == null
+      ? 0
+      : Math.abs(state.temp - 22) * 2.5;
+    
+    const rhPenalty = state.rh == null
+      ? 0
+      : Math.abs(state.rh - 50) * 0.5;
+    
+    const presPenalty = pressureEffect(state.pres);
+    
+    // synergies (ressenti réel)
+    let synergyPenalty = 0;
+    
+    if(state.temp > 25 && state.rh > 60){
+      synergyPenalty += 3;
+    }
+    
+    if(state.temp < 19 && state.rh < 40){
+      synergyPenalty += 2;
+    }
+    
+    if(state.pres < 1005 && state.rh > 65){
+      synergyPenalty += 2;
+    }
+    
+    const rawTCI = tempPenalty + rhPenalty + presPenalty + synergyPenalty;
+    
+    // normalisation cohérente avec ton modèle
+    const maxRaw = 80;
+    const TCI_penalty_pct = clamp((rawTCI / maxRaw) * 100);
+    const TCI = clamp(100 - TCI_penalty_pct);
 
     // ---------- SRI ----------
     const last60=lastWindow.slice(-60);
