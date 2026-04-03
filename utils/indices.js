@@ -190,6 +190,34 @@ function interpretSRI(SRI, lastWindow) {
 }
 
 
+// -------- GEI helpers ---------
+function interpretGEI(GEI, corrPairs) {
+  let label = "";
+  if (GEI >= 90) label = "Équilibré";
+  else if (GEI >= 75) label = "Légèrement déséquilibré";
+  else if (GEI >= 50) label = "Déséquilibré";
+  else label = "Très déséquilibré";
+
+  let insight = "Gaz en équilibre";
+  let context = "Interactions normales entre les gaz";
+  let hint = "Aucune action requise";
+
+  // Détecter les corrélations fortes ou inverses
+  const highCorr = [];
+  for (const [pair, val] of Object.entries(corrPairs)) {
+    if (Math.abs(val) > 0.6) {
+      highCorr.push(`${pair} (${val > 0 ? "corrélation forte" : "corrélation inverse"})`);
+    }
+  }
+
+  if (highCorr.length) {
+    insight = "Gaz instables";
+    context = `Interactions notables : ${highCorr.join(", ")}`;
+    hint = "Ventiler ou vérifier sources de pollution";
+  }
+
+  return { label, insight, context, hint };
+}
 
 
 export function computeIndices(state,lastWindow=[]){
@@ -293,6 +321,8 @@ export function computeIndices(state,lastWindow=[]){
     const meanAbsCorr = countPairs ? sumAbsCorr / countPairs : 0;
     const GEI = clamp(100 - meanAbsCorr * 100, 0, 100);
 
+    const geiUX = interpretGEI(GEI, corrPairs);
+
     // ---------- GAQI ----------
     const alpha={a1:0.45,a2:0.25,a3:0.2,a4:0.1};
     const GAQI=clamp(100-(alpha.a1*AQ_penalty+alpha.a2*TCI_penalty_pct+alpha.a3*(100-GEI)+alpha.a4*Volatility_penalty));
@@ -317,6 +347,10 @@ export function computeIndices(state,lastWindow=[]){
     SRI_context: sriUX.context,
     SRI_hint: sriUX.hint,
     GEI: Number(GEI.toFixed(2)),
+    GEI_label: geiUX.label,
+    GEI_insight: geiUX.insight,
+    GEI_context: geiUX.context,
+    GEI_hint: geiUX.hint,
     corr_co2_no2: corrPairs["co2-no2"] || 0,
     corr_co2_co: corrPairs["co2-co"] || 0,
     corr_co2_nh3: corrPairs["co2-nh3"] || 0,
