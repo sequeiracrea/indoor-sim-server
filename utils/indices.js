@@ -93,6 +93,69 @@ function interpretTCI(TCI, state){
   return { label, feel, context, hint };
 }
 
+
+// ----- AQL STATE --------
+function interpretAQL(AQL, state){
+
+  // ---------- niveau global ----------
+  let label = "";
+  if (AQL >= 90) label = "Excellent";
+  else if (AQL >= 75) label = "Bon";
+  else if (AQL >= 50) label = "Moyen";
+  else label = "Dégradé";
+
+  // ---------- analyse dominante ----------
+  let insight = "Air sain";
+  let context = "Aucune pollution notable";
+
+  const { co2, no2, nh3, co } = state;
+
+  // priorité aux cas les plus parlants utilisateur
+
+  if (co2 > 1000){
+    insight = "Air confiné";
+    context = "CO₂ élevé (manque de renouvellement)";
+  }
+  else if (no2 > 80){
+    insight = "Air pollué";
+    context = "Présence de dioxyde d’azote (NO₂)";
+  }
+  else if (co > 2){
+    insight = "Air potentiellement dangereux";
+    context = "Présence de monoxyde de carbone (CO)";
+  }
+  else if (nh3 > 0.05){
+    insight = "Air irritant";
+    context = "Présence d’ammoniac (NH₃)";
+  }
+  else if (co2 > 800){
+    insight = "Air légèrement confiné";
+    context = "CO₂ modérément élevé";
+  }
+
+  // ---------- suggestion ----------
+  let hint = null;
+
+  if (co2 > 800){
+    hint = "Aérer la pièce recommandé";
+  }
+  if (no2 > 80){
+    hint = "Limiter les sources de pollution intérieure";
+  }
+  if (co > 2){
+    hint = "Vérifier les appareils de combustion";
+  }
+  if (nh3 > 0.05){
+    hint = "Ventiler et identifier la source";
+  }
+
+  return { label, insight, context, hint };
+}
+
+
+
+
+
 export function computeIndices(state,lastWindow=[]){
   try{
     // ---------- AQL ----------
@@ -105,6 +168,7 @@ export function computeIndices(state,lastWindow=[]){
     const weights={co2:0.5,no2:0.25,nh3:0.15,co:0.1};
     const AQ_penalty=p.co2*weights.co2+p.no2*weights.no2+p.nh3*weights.nh3+p.co*weights.co;
     const AQL=clamp(100-AQ_penalty);
+    const aqlUX = interpretAQL(AQL, state);
 
     // ---------- TCI (version optimisée + smart UX) ----------
     const tempPenalty = state.temp == null
@@ -199,6 +263,10 @@ export function computeIndices(state,lastWindow=[]){
   return {
     AQL: Number(AQL.toFixed(2)),
     AQ_penalty: Number(AQ_penalty.toFixed(2)),
+    AQL_label: aqlUX.label,
+    AQL_insight: aqlUX.insight,
+    AQL_context: aqlUX.context,
+    AQL_hint: aqlUX.hint,
     TCI: Number(TCI.toFixed(2)),
     TCI_penalty_pct: Number(TCI_penalty_pct.toFixed(2)),
     TCI_label: tciUX.label,
